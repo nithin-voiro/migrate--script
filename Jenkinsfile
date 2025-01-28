@@ -4,6 +4,8 @@ pipeline {
         LANGUAGE = 'en_US.en'
         LANG = 'en_US.UTF-8'
         LC_ALL = 'en_US.UTF-8'
+        UAT_SERVERS = 'myntra-uat'
+        MYNTRA_SERVERS = 'myntra-qa,qa-automation,myntra-uat'
     }
     parameters {
         string(name: 'Hosts', defaultValue: '', description: 'Comma-separated list of hosts to deploy')
@@ -74,7 +76,6 @@ pipeline {
                             switch (job) {
                                 case 'Build and Deploy FE':
                                     echo "Building and deploying FE..."
-                                    // Simulate Windows commands for build and deploy
                                     bat """
                                         git reset --hard
                                         git checkout primary
@@ -112,7 +113,6 @@ pipeline {
                                 case 'Restart Celery':
                                     echo "Restarting Celery..."
                                     if (isMyntraServer) {
-                                        // Custom commands for Myntra servers
                                         bat """
                                             docker exec ${docker} /bin/bash -c "cat /var/run/celery/thinktank_project_others.pid | xargs kill -term" || echo No PID found.
                                             docker exec ${docker} /bin/bash -c "celery -A thinktank_project worker -Q general_queue --detach"
@@ -149,5 +149,3 @@ pipeline {
         }
     }
 }
-
-
