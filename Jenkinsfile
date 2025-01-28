@@ -5,8 +5,8 @@ pipeline {
         LANG = "en_US.UTF-8"
         LC_ALL = "en_US.UTF-8"
         BRANCH = "pre-prod"
-        UAT_SERVERS = ['myntra-uat']
-        MYNTRA_SERVERS = ['myntra-qa', 'qa-automation', 'myntra-uat']
+        UAT_SERVERS = "myntra-uat" // Changed to a string
+        MYNTRA_SERVERS = "myntra-qa,qa-automation,myntra-uat" // Changed to a string
     }
 
     parameters {
@@ -37,6 +37,13 @@ pipeline {
                     def jobsArray = params.Jobs.split(',')
                     env.HOSTS = hostArray
                     env.JOBS = jobsArray
+
+                    // Parse UAT and MYNTRA server lists
+                    def uatServers = UAT_SERVERS.split(',')
+                    def myntraServers = MYNTRA_SERVERS.split(',')
+
+                    env.UAT_SERVERS_LIST = uatServers
+                    env.MYNTRA_SERVERS_LIST = myntraServers
                 }
             }
         }
@@ -55,7 +62,7 @@ pipeline {
                             docker = "phoenix_merge"
                         }
 
-                        if (hostname in UAT_SERVERS) {
+                        if (hostname in env.UAT_SERVERS_LIST) {
                             env.BRANCH = "primary-uat"
                         }
 
@@ -158,4 +165,5 @@ void restartServer(String hostname, String docker) {
         }
     }
 }
+
 
