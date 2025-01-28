@@ -1,136 +1,81 @@
 pipeline {
     agent any
+
     environment {
-        LANGUAGE = 'en_US.en'
-        LANG = 'en_US.UTF-8'
-        LC_ALL = 'en_US.UTF-8'
+        LANG = "en_US.UTF-8"
+        LC_ALL = "en_US.UTF-8"
+        BRANCH = "pre-prod"
+        UAT_SERVERS = ['myntra-uat']
+        MYNTRA_SERVERS = ['myntra-qa', 'qa-automation', 'myntra-uat']
     }
+
     parameters {
-        string(name: 'Hosts', defaultValue: '', description: 'Comma-separated list of hosts to deploy')
-        string(name: 'Jobs', defaultValue: '', description: 'Comma-separated list of jobs to perform')
+        string(name: 'Hosts', description: 'Comma-separated list of hosts to deploy')
+        string(name: 'Jobs', description: 'Comma-separated list of jobs to perform')
+        string(name: 'BUILD_NUMBER', defaultValue: '1', description: 'Build number')
     }
+
     stages {
         stage('Validation') {
             steps {
                 script {
-                    if (!params.Hosts?.trim()) {
-                        error("Please select the boxes to deploy.")
+                    if (!params.Hosts) {
+                        error "Please select the boxes to deploy."
                     }
-                    if (!params.Jobs?.trim()) {
-                        error("Please select at least one job to perform.")
+
+                    if (!params.Jobs) {
+                        error "Please select at least 1 job to perform."
                     }
                 }
             }
         }
-        stage('Setup') {
+
+        stage('Preparation') {
             steps {
                 script {
-                    // Parse Hosts and Jobs into arrays
-                    def hostArray = params.Hosts.split(',').collect { it.trim() }
-                    def jobArray = params.Jobs.split(',').collect { it.trim() }
-
-                    // Initialize variables
-                    branch = 'pre-prod'
-                    uatServers = ['myntra-uat']
-                    myntraServers = ['myntra-qa', 'qa-automation', 'myntra-uat']
-
-                    // Pass parsed arrays to the next stages
-                    env.HOST_ARRAY = hostArray.join(',')
-                    env.JOB_ARRAY = jobArray.join(',')
-                    env.UAT_SERVERS = uatServers.join(',')
-                    env.MYNTRA_SERVERS = myntraServers.join(',')
+                    def hostArray = params.Hosts.split(',')
+                    def jobsArray = params.Jobs.split(',')
+                    env.HOSTS = hostArray
+                    env.JOBS = jobsArray
                 }
             }
         }
-        stage('Deploy to Hosts') {
+
+        stage('Deployment') {
             steps {
                 script {
-                    def hostArray = env.HOST_ARRAY.split(',')
-                    def jobArray = env.JOB_ARRAY.split(',')
+                    env.HOSTS.each { hostname ->
+                        def folder = "voiro"
+                        def docker = "phoenix"
 
-                    // Iterate over each host
-                    for (hostname in hostArray) {
-                        def folder = 'voiro'
-                        def docker = 'phoenix'
-                        def isUatServer = env.UAT_SERVERS.contains(hostname)
-                        def isMyntraServer = env.MYNTRA_SERVERS.contains(hostname)
-
-                        // Set branch and docker configurations
-                        if (hostname == 'dstv-staging' || hostname == 'rooter-replica') {
-                            folder = 'ubuntu'
-                            docker = 'phoenix_merge'
-                        }
-                        if (hostname == 'myntra-uat') {
-                            docker = 'phoenix_merge'
-                        }
-                        if (isUatServer) {
-                            branch = 'primary-uat'
+                        if (hostname in ['dstv-staging', 'rooter-replica']) {
+                            folder = "ubuntu"
+                            docker = "phoenix_merge"
+                        } else if (hostname == 'myntra-uat') {
+                            docker = "phoenix_merge"
                         }
 
-                        // Execute jobs for each host
-                        for (job in jobArray) {
-                            echo "Executing job '${job}' on host '${hostname}' with branch '${branch}'"
+                        if (hostname in UAT_SERVERS) {
+                            env.BRANCH = "primary-uat"
+                        }
 
+                        env.JOBS.each { job ->
                             switch (job) {
-                                case 'Build and Deploy FE':
-                                    echo "Building and deploying FE..."
-                                    // Simulate Windows commands for build and deploy
-                                    bat """
-                                        git reset --hard
-                                        git checkout primary
-                                        git branch -D ${branch} || echo Branch does not exist locally. Ignore.
-                                        git checkout ${branch}
-                                        npm install -f
-                                        git reset --hard
-                                        set VERSION=${branch}-${BUILD_NUMBER}
-                                        sed -i "s/{{version}}/%VERSION%/g" src\\app\\app.component.ts
-                                        ng build
-                                        cd dist\\voiro-frontend
-                                        zip -r %VERSION%.zip browser
-                                        aws s3 cp %VERSION%.zip s3://phoenix-fe-builds/
-                                    """
+                                case "Build and Deploy FE":
+                                    buildAndDeployFE(hostname, folder, docker)
                                     break
-
-                                case 'Deploy BE':
-                                    echo "Deploying BE..."
-                                    if (hostname == 'dstv-staging') {
-                                        branch = 'dstv_staging'
-                                    }
-                                    bat """
-                                        git pull origin ${branch} --ff -f
-                                    """
+                                case "Deploy BE":
+                                    deployBE(hostname, folder, docker)
                                     break
-
-                                case 'Migrate DB':
-                                    echo "Migrating database..."
-                                    bat """
-                                        docker exec ${docker} /bin/bash -c "python manage.py makemigrations --merge"
-                                        docker exec ${docker} /bin/bash -c "python manage.py migrate"
-                                    """
+                                case "Migrate DB":
+                                    migrateDB(hostname, docker)
                                     break
-
-                                case 'Restart Celery':
-                                    echo "Restarting Celery..."
-                                    if (isMyntraServer) {
-                                        // Custom commands for Myntra servers
-                                        bat """
-                                            docker exec ${docker} /bin/bash -c "cat /var/run/celery/thinktank_project_others.pid | xargs kill -term" || echo No PID found.
-                                            docker exec ${docker} /bin/bash -c "celery -A thinktank_project worker -Q general_queue --detach"
-                                        """
-                                    } else {
-                                        bat """
-                                            docker exec ${docker} /bin/bash -c "celery worker --beat --detach"
-                                        """
-                                    }
+                                case "Restart Celery":
+                                    restartCelery(hostname, docker)
                                     break
-
-                                case 'Restart Server':
-                                    echo "Restarting server..."
-                                    bat """
-                                        docker exec ${docker} /bin/bash -c "apachectl graceful"
-                                    """
+                                case "Restart Server":
+                                    restartServer(hostname, docker)
                                     break
-
                                 default:
                                     echo "Unknown job: ${job}"
                             }
@@ -140,12 +85,77 @@ pipeline {
             }
         }
     }
+
     post {
         always {
-            echo "Deployment completed."
-        }
-        failure {
-            echo "Deployment failed. Check logs for details."
+            cleanWs()
         }
     }
 }
+
+// Function Definitions
+
+void buildAndDeployFE(String hostname, String folder, String docker) {
+    stage("Build and Deploy FE on ${hostname}") {
+        steps {
+            sh '''
+                git reset --hard
+                git checkout primary
+                git branch -D ${BRANCH} || echo "${BRANCH} does not exist in local. Ignore."
+                git checkout ${BRANCH}
+                npm install -f
+                git reset --hard
+                version=${BRANCH}-${BUILD_NUMBER}
+                sed -i "s/{{version}}/${version}/g" src/app/app.component.ts
+                ng build
+                cd dist/voiro-frontend
+                mv 3rdpartylicenses.txt browser/3rdpartylicenses.txt
+                zip ${version}.zip -r browser
+                aws s3 cp ${version}.zip s3://phoenix-fe-builds/ --region ap-south-1
+                git reset --hard
+            '''
+        }
+    }
+}
+
+void deployBE(String hostname, String folder, String docker) {
+    stage("Deploy BE on ${hostname}") {
+        steps {
+            sh '''
+                ssh -i /var/lib/jenkins/.ssh/build.key voiro@${hostname}.voiro.com "cd /home/${folder}/code; git pull origin ${BRANCH} --ff -f"
+            '''
+        }
+    }
+}
+
+void migrateDB(String hostname, String docker) {
+    stage("Migrate DB on ${hostname}") {
+        steps {
+            sh '''
+                ssh -i /var/lib/jenkins/.ssh/build.key voiro@${hostname}.voiro.com "docker exec ${docker} /bin/bash -c \"cd /code/thinktank_project; export LC_ALL=en_US.UTF-8; export LANG=en_US.UTF-8; yes | python manage.py makemigrations --merge\""
+                ssh -i /var/lib/jenkins/.ssh/build.key voiro@${hostname}.voiro.com "docker exec ${docker} /bin/bash -c \"python manage.py migrate\""
+            '''
+        }
+    }
+}
+
+void restartCelery(String hostname, String docker) {
+    stage("Restart Celery on ${hostname}") {
+        steps {
+            sh '''
+                ssh -i /var/lib/jenkins/.ssh/build.key voiro@${hostname}.voiro.com "docker exec ${docker} /bin/bash -c \"export LC_ALL=en_US.UTF-8; export LANG=en_US.UTF-8; celery -A thinktank_project worker -l info --detach\""
+            '''
+        }
+    }
+}
+
+void restartServer(String hostname, String docker) {
+    stage("Restart Server on ${hostname}") {
+        steps {
+            sh '''
+                ssh -i /var/lib/jenkins/.ssh/build.key voiro@${hostname}.voiro.com "docker exec ${docker} /bin/bash -c \"export LC_ALL=en_US.UTF-8; export LANG=en_US.UTF-8; apachectl graceful\""
+            '''
+        }
+    }
+}
+
