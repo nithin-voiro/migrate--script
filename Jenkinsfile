@@ -1,3 +1,9 @@
+properties([
+  parameters([
+    string(name: 'PARAM1', defaultValue: 'default', description: 'Example Parameter'),
+    booleanParam(name: 'ENABLE_FEATURE', defaultValue: false, description: 'Enable Feature')
+  ])
+])
 pipeline {
     agent any
     environment {
